@@ -1,5 +1,5 @@
 //@version=6
-indicator("Ultimate Trading System", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+indicator("Ultimate Trading System v2.0", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
 
 // ==================== 입력 파라미터 ====================
 // 기본 설정
@@ -28,9 +28,22 @@ multBB = input.float(2.0, "BB Mult", minval=0.1, group="Squeeze")
 lengthKC = input.int(20, "KC Length", minval=1, group="Squeeze")
 multKC = input.float(1.5, "KC Mult", minval=0.1, group="Squeeze")
 
-// Confluence (새로운 기능)
-swingLookback = input.int(500, "Swing 범위", minval=100, maxval=2000, group="Confluence")
-srLookback = input.int(300, "S/R 범위", minval=100, maxval=1000, group="Confluence")
+// Confluence - 타임프레임별 자동 조정
+useAutoSwing = input.bool(true, "Swing 자동 조정", group="Confluence")
+manualSwingLookback = input.int(100, "수동 Swing 범위", minval=20, maxval=500, group="Confluence")
+swingWeight = input.int(20, "Swing 가중치", minval=0, maxval=50, group="Confluence")
+
+// 백테스팅
+maxHistoryLabels = input.int(50, "과거 라벨 개수", minval=10, maxval=100, group="백테스팅")
+
+// ==================== 타임프레임별 자동 조정 ====================
+htf = timeframe.period == "1" or timeframe.period == "3" ? "5" :
+      timeframe.period == "5" ? "15" :
+      timeframe.period == "15" ? "60" : "240"
+
+// Swing 범위 자동 설정
+autoSwing = timeframe.period == "1" or timeframe.period == "3" ? 30 : timeframe.period == "5" ? 50 : timeframe.period == "15" ? 150 : 200
+swingLookback = useAutoSwing ? autoSwing : manualSwingLookback
 
 // ==================== EMA 계산 ====================
 ema5 = ta.ema(close, ema5Length)
@@ -44,11 +57,6 @@ plot(showEMA ? ema60 : na, "EMA 60", color=color.purple, linewidth=2)
 emaBullish = close > ema5 and ema5 > ema20 and ema20 > ema60
 emaBearish = close < ema5 and ema5 < ema20 and ema20 < ema60
 nearEMA20 = math.abs(close - ema20) / close < 0.005
-
-// ==================== 타임프레임 ====================
-htf = timeframe.period == "1" or timeframe.period == "3" ? "5" :
-      timeframe.period == "5" ? "15" :
-      timeframe.period == "15" ? "60" : "240"
 
 // ==================== 3TF 추세 ====================
 currentTF_MA = ta.sma(close, 20)
@@ -226,7 +234,6 @@ nearSwingLow = not na(swingLow) and math.abs(close - swingLow) / close < 0.01
 var int score = 0
 score := 0
 
-// 기본 요소
 mssRecent = bullishMSS or bullishMSS[1] or bullishMSS[2] or bearishMSS or bearishMSS[1] or bearishMSS[2]
 if mssRecent
     score := score + 25
@@ -249,11 +256,10 @@ if emaBullish or emaBearish
 if nearEMA20
     score := score + 10
 
-// Confluence 추가 점수
+// Swing 가중치 적용
 if nearSwingHigh or nearSwingLow
-    score := score + 40
+    score := score + swingWeight
 
-// 심리적 가격 (00으로 끝남)
 roundNumber = close % 1000 < 50 or close % 1000 > 950
 if roundNumber
     score := score + 10
@@ -271,9 +277,42 @@ isSshort = shortCondition and score >= 150 and score < 180
 plotshape(isSplusLong, "LONG S+", shape.triangleup, location.belowbar, color.new(color.lime, 0), size=size.huge)
 plotshape(isSlong, "LONG S", shape.triangleup, location.belowbar, color.new(color.lime, 0), size=size.large)
 plotshape(isSplusShort, "SHORT S+", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.huge)
-plotshape(isSshort, "SHORT S", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.large)
+plotshape(isSshort, "SHORT S", shape.triangledown, location.abovebar, color.new(color.red, 0), size=size.huge)
 
-// ==================== 목표/손절 라인 ====================
+// ==================== 백테스팅용 라벨 (삭제 안함) ====================
+var historyLabels = array.new<label>()
+
+if longCondition
+    entryPrice = close
+    stopPrice = entryPrice * (1 - stopLossPercent / 100)
+    targetDist = entryPrice - stopPrice
+    target2Price = entryPrice + targetDist * rrRatio
+    
+    gradeText = score >= 180 ? "S+" : "S"
+    labelText = "L " + str.tostring(entryPrice, format.mintick) + "\nSL " + str.tostring(stopPrice, format.mintick) + "\nTP " + str.tostring(target2Price, format.mintick) + "\n" + gradeText + "(" + str.tostring(score) + ")"
+    
+    histLabel = label.new(bar_index, low, labelText, color=color.new(color.lime, 70), textcolor=color.white, style=label.style_label_up, size=size.small)
+    array.push(historyLabels, histLabel)
+    
+    if array.size(historyLabels) > maxHistoryLabels
+        label.delete(array.shift(historyLabels))
+
+if shortCondition
+    entryPrice = close
+    stopPrice = entryPrice * (1 + stopLossPercent / 100)
+    targetDist = stopPrice - entryPrice
+    target2Price = entryPrice - targetDist * rrRatio
+    
+    gradeText = score >= 180 ? "S+" : "S"
+    labelText = "S " + str.tostring(entryPrice, format.mintick) + "\nSL " + str.tostring(stopPrice, format.mintick) + "\nTP " + str.tostring(target2Price, format.mintick) + "\n" + gradeText + "(" + str.tostring(score) + ")"
+    
+    histLabel = label.new(bar_index, high, labelText, color=color.new(color.red, 70), textcolor=color.white, style=label.style_label_down, size=size.small)
+    array.push(historyLabels, histLabel)
+    
+    if array.size(historyLabels) > maxHistoryLabels
+        label.delete(array.shift(historyLabels))
+
+// ==================== 최신 신호용 라인 (기존 유지) ====================
 var line entryLine = na
 var line stopLine = na
 var line target1Line = na
@@ -282,7 +321,6 @@ var label entryLabel = na
 var label stopLabel = na
 var label target1Label = na
 var label target2Label = na
-var label gradeLabel = na
 
 if longCondition
     if not na(entryLine)
@@ -294,10 +332,9 @@ if longCondition
         label.delete(stopLabel)
         label.delete(target1Label)
         label.delete(target2Label)
-        label.delete(gradeLabel)
     
     entryPrice = close
-    stopPrice = not na(swingLow) ? swingLow * 0.997 : entryPrice * (1 - stopLossPercent / 100)
+    stopPrice = entryPrice * (1 - stopLossPercent / 100)
     targetDist = entryPrice - stopPrice
     target1Price = entryPrice + targetDist * rrRatio / 2
     target2Price = entryPrice + targetDist * rrRatio
@@ -307,13 +344,10 @@ if longCondition
     target1Line := line.new(bar_index, target1Price, bar_index + 10, target1Price, color=color.green, width=1, style=line.style_dotted)
     target2Line := line.new(bar_index, target2Price, bar_index + 10, target2Price, color=color.green, width=2, style=line.style_dashed)
     
-    entryLabel := label.new(bar_index + 10, entryPrice, "진입: " + str.tostring(entryPrice, format.mintick), color=color.black, textcolor=color.white, style=label.style_label_left, size=size.normal)
+    entryLabel := label.new(bar_index + 10, entryPrice, "LONG " + str.tostring(entryPrice, format.mintick), color=color.black, textcolor=color.white, style=label.style_label_left, size=size.normal)
     stopLabel := label.new(bar_index + 10, stopPrice, "손절: " + str.tostring(stopPrice, format.mintick), color=color.red, textcolor=color.white, style=label.style_label_left, size=size.small)
     target1Label := label.new(bar_index + 10, target1Price, "1차: " + str.tostring(target1Price, format.mintick), color=color.green, textcolor=color.white, style=label.style_label_left, size=size.small)
     target2Label := label.new(bar_index + 10, target2Price, "2차: " + str.tostring(target2Price, format.mintick), color=color.green, textcolor=color.white, style=label.style_label_left, size=size.small)
-    
-    gradeText = score >= 180 ? "S+" : "S"
-    gradeLabel := label.new(bar_index, low, gradeText + "(" + str.tostring(score) + ")", color=color.new(color.lime, 30), textcolor=color.white, style=label.style_label_up, size=size.small)
 
 if shortCondition
     if not na(entryLine)
@@ -325,10 +359,9 @@ if shortCondition
         label.delete(stopLabel)
         label.delete(target1Label)
         label.delete(target2Label)
-        label.delete(gradeLabel)
     
     entryPrice = close
-    stopPrice = not na(swingHigh) ? swingHigh * 1.003 : entryPrice * (1 + stopLossPercent / 100)
+    stopPrice = entryPrice * (1 + stopLossPercent / 100)
     targetDist = stopPrice - entryPrice
     target1Price = entryPrice - targetDist * rrRatio / 2
     target2Price = entryPrice - targetDist * rrRatio
@@ -338,18 +371,16 @@ if shortCondition
     target1Line := line.new(bar_index, target1Price, bar_index + 10, target1Price, color=color.green, width=1, style=line.style_dotted)
     target2Line := line.new(bar_index, target2Price, bar_index + 10, target2Price, color=color.green, width=2, style=line.style_dashed)
     
-    entryLabel := label.new(bar_index + 10, entryPrice, "진입: " + str.tostring(entryPrice, format.mintick), color=color.black, textcolor=color.white, style=label.style_label_left, size=size.normal)
+    entryLabel := label.new(bar_index + 10, entryPrice, "SHORT " + str.tostring(entryPrice, format.mintick), color=color.black, textcolor=color.white, style=label.style_label_left, size=size.normal)
     stopLabel := label.new(bar_index + 10, stopPrice, "손절: " + str.tostring(stopPrice, format.mintick), color=color.red, textcolor=color.white, style=label.style_label_left, size=size.small)
     target1Label := label.new(bar_index + 10, target1Price, "1차: " + str.tostring(target1Price, format.mintick), color=color.green, textcolor=color.white, style=label.style_label_left, size=size.small)
     target2Label := label.new(bar_index + 10, target2Price, "2차: " + str.tostring(target2Price, format.mintick), color=color.green, textcolor=color.white, style=label.style_label_left, size=size.small)
-    
-    gradeText = score >= 180 ? "S+" : "S"
-    gradeLabel := label.new(bar_index, high, gradeText + "(" + str.tostring(score) + ")", color=color.new(color.red, 30), textcolor=color.white, style=label.style_label_down, size=size.small)
 
 // ==================== 테이블 ====================
-var table infoTable = table.new(position.top_right, 2, 8, border_width=2, border_color=color.gray)
+var table infoTable = table.new(position.top_right, 2, 9, border_width=2, border_color=color.gray)
 
 if barstate.islast
+    maxScore = 145 + swingWeight
     gradeText = score >= 180 ? "S+" : score >= 150 ? "S" : score >= 120 ? "A" : "B"
     gradeColor = score >= 180 ? color.new(color.green, 0) : score >= 150 ? color.new(color.orange, 0) : score >= 120 ? color.new(color.yellow, 0) : color.new(color.gray, 0)
     
@@ -357,7 +388,7 @@ if barstate.islast
     table.cell(infoTable, 1, 0, "상태", text_color=color.white, bgcolor=color.gray)
     
     table.cell(infoTable, 0, 1, "점수", text_color=color.white, bgcolor=color.gray)
-    table.cell(infoTable, 1, 1, str.tostring(score) + "/220", text_color=color.white, bgcolor=gradeColor, text_size=size.large)
+    table.cell(infoTable, 1, 1, str.tostring(score) + "/" + str.tostring(maxScore), text_color=color.white, bgcolor=gradeColor, text_size=size.large)
     
     table.cell(infoTable, 0, 2, "등급", text_color=color.white, bgcolor=color.gray)
     table.cell(infoTable, 1, 2, gradeText, text_color=color.white, bgcolor=gradeColor, text_size=size.large)
@@ -377,7 +408,7 @@ if barstate.islast
     table.cell(infoTable, 0, 5, "Volume", text_color=color.white, bgcolor=color.gray)
     table.cell(infoTable, 1, 5, volText, text_color=color.white, bgcolor=volBgColor)
     
-    swingText = nearSwingLow ? "Low 근처" : nearSwingHigh ? "High 근처" : "-"
+    swingText = nearSwingLow ? "Low" : nearSwingHigh ? "High" : "-"
     swingBgColor = (nearSwingLow or nearSwingHigh) ? color.new(color.green, 70) : color.new(color.gray, 70)
     table.cell(infoTable, 0, 6, "Swing", text_color=color.white, bgcolor=color.gray)
     table.cell(infoTable, 1, 6, swingText, text_color=color.white, bgcolor=swingBgColor)
@@ -386,6 +417,9 @@ if barstate.islast
     sqzBgColor = sqzOn ? color.new(color.red, 70) : sqzOff ? color.new(color.green, 70) : color.new(color.gray, 70)
     table.cell(infoTable, 0, 7, "Squeeze", text_color=color.white, bgcolor=color.gray)
     table.cell(infoTable, 1, 7, sqzText, text_color=color.white, bgcolor=sqzBgColor)
+    
+    table.cell(infoTable, 0, 8, "TF Swing", text_color=color.white, bgcolor=color.gray)
+    table.cell(infoTable, 1, 8, str.tostring(swingLookback), text_color=color.white, bgcolor=color.new(color.blue, 70))
 
 // ==================== 알림 ====================
 alertcondition(longCondition, "LONG", "LONG - {{ticker}} {{interval}}")
